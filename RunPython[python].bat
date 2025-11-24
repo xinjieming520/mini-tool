@@ -65,13 +65,7 @@ if errorlevel 1 (
     pause >nul
     goto MAIN
 )
-echo.
-echo 运行脚本命令:
-echo -------------------------------
-echo !python_cmd! "!selected_file!"
-echo -------------------------------
-echo 按回车开始运行...
-pause >nul
+
 cls
 !python_cmd! "!selected_file!"
 set run_error=!errorlevel!
