@@ -80,8 +80,8 @@ if !run_error! neq 0 (
 cls
 :: 询问是否继续运行其他脚本（默认n）
 echo.
-set continue=n
-set /p continue=是否继续运行其他脚本？(y/N, 默认N)：
+set continue=y
+set /p continue=是否继续运行其他脚本？(Y/n, 默认Y)：
 if /i "!continue!"=="y" goto MAIN
 goto EXIT
 
