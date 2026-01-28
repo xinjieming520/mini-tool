@@ -88,7 +88,7 @@ class UVEnvironmentManagerWindows:
         print("2. 配置环境变量")
         print("3. 检查当前UV状态")
         print("4. 项目UV环境初始化")
-        print("5. 修复路径问题")
+        print("5. 添加UVpath路径")
         print("0. 退出")
         print("-" * 60)
     
