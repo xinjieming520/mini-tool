@@ -42,9 +42,10 @@ for %%i in (*.js *.mjs *.cjs) do (
 
 :: 检查是否找到脚本文件
 if %file_count% equ 0 (
-    echo [错误] 在当前目录中未找到任何脚本文件！
-    echo 支持的文件类型：.js .mjs .cjs
     echo 当前目录：%cd%
+    echo [错误]：未找到任何脚本文件！
+    echo [检查]：支持的文件类型：.js .mjs .cjs
+    
     pause
     exit /b 1
 )
@@ -62,7 +63,7 @@ echo.
 
 :: 让用户选择要运行的文件
 :select_file
-set /p file_choice="请输入要运行的文件编号（0-%file_count%），直接按回车使用默认选择 [1]："
+set /p file_choice="请输入文件编号（0-%file_count%），默认[1]："
 
 :: 如果用户直接按回车，使用默认选择（第一个文件）
 if "%file_choice%"=="" (
