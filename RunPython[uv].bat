@@ -26,7 +26,7 @@ if !count!==0 (
 
 :: 用户输入选择脚本
 :SELECT_SCRIPT
-echo 请输入脚本序号(1-!count!), 直接回车默认选择1：
+echo 请输入脚本序号(1-!count!), 回车默认选择1：
 set /p choice=请选择：
 if "!choice!"=="" (
     set choice=1
