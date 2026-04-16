@@ -56,31 +56,47 @@ echo ----------------------------------------
 for /l %%i in (1,1,%file_count%) do (
     echo   [%%i] !file_%%i!
 )
+echo   [0] 退出脚本
 echo ----------------------------------------
 echo.
 
 :: 让用户选择要运行的文件
 :select_file
-set /p file_choice="请输入要运行的文件编号（1-%file_count%）："
+set /p file_choice="请输入要运行的文件编号（0-%file_count%），直接按回车使用默认选择 [1]："
 
-:: 验证用户输入
+:: 如果用户直接按回车，使用默认选择（第一个文件）
 if "%file_choice%"=="" (
-    echo 输入无效，请输入一个数字
-    goto select_file
+    set file_choice=1
+    goto run_script
 )
 
 :: 检查输入是否为数字
 set "is_num="
 for /l %%i in (0,1,9) do if "%file_choice%"=="%%i" set is_num=1
 if not defined is_num (
-    echo 输入无效，请输入 1 到 %file_count% 之间的数字
+    echo 输入无效，请输入数字 0 到 %file_count%
     goto select_file
 )
 
 :: 检查数字是否在有效范围内
-if %file_choice% lss 1 goto invalid_choice
-if %file_choice% gtr %file_count% goto invalid_choice
+if %file_choice% lss 0 (
+    echo 编号无效，请输入 0 到 %file_count% 之间的数字
+    goto select_file
+)
+if %file_choice% gtr %file_count% (
+    echo 编号无效，请输入 0 到 %file_count% 之间的数字
+    goto select_file
+)
 
+:: 处理退出选项
+if %file_choice% equ 0 (
+    echo.
+    echo 已退出脚本启动器
+    pause
+    exit /b 0
+)
+
+:run_script
 :: 获取选中的文件名
 set selected_file=!file_%file_choice%!
 echo.
@@ -111,7 +127,3 @@ echo.
 echo [信息] 脚本已停止运行
 pause
 exit /b 0
-
-:invalid_choice
-echo 选择无效，请输入 1 到 %file_count% 之间的数字
-goto select_file
