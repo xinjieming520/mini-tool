@@ -50,7 +50,18 @@ if %file_count% equ 0 (
     exit /b 1
 )
 
-:: 显示文件列表
+:: 如果只有一个文件，直接运行
+if %file_count% equ 1 (
+    set selected_file=!file_1!
+    echo 检测到当前目录只有一个脚本文件：
+    echo   !selected_file!
+    echo.
+    echo 将直接运行此文件...
+    echo.
+    goto run_script
+)
+
+:: 显示文件列表（仅当有多个文件时）
 echo 找到 %file_count% 个脚本文件：
 echo.
 echo ----------------------------------------
@@ -98,11 +109,13 @@ if %file_choice% equ 0 (
 )
 
 :run_script
-:: 获取选中的文件名
-set selected_file=!file_%file_choice%!
+:: 获取选中的文件名（如果还没设置）
+if not defined selected_file (
+    set selected_file=!file_%file_choice%!
+)
 echo.
 echo ========================================
-echo 已选中：%selected_file%
+echo 已选中：!selected_file!
 echo ========================================
 echo.
 
@@ -112,7 +125,7 @@ if %use_nodemon% equ 1 (
     echo 按 Ctrl+C 可停止
     echo ========================================
     echo.
-    nodemon "%selected_file%"
+    nodemon "!selected_file!"
 ) else (
     echo 使用 node 启动...
     echo 提示：安装 nodemon 可获得热重载功能
@@ -120,7 +133,7 @@ if %use_nodemon% equ 1 (
     echo 按 Ctrl+C 可停止
     echo ========================================
     echo.
-    node "%selected_file%"
+    node "!selected_file!"
 )
 
 :: 如果程序退出，暂停查看结果
