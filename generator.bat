@@ -1,189 +1,189 @@
+<# :
 @echo off
-setlocal enabledelayedexpansion
+title å¼€å‘è€…å®ç”¨å·¥å…·ç®± - Generator Pro
+:: ä»¥ç»•è¿‡ç­–ç•¥çš„æ–¹å¼å¯åŠ¨å†…éƒ¨ PowerShell è„šæœ¬
+powershell -NoProfile -ExecutionPolicy Bypass -Command "iex ((Get-Content '%~f0' -Encoding UTF8) -join [Environment]::NewLine)"
+exit /b
+#>
 
-:: ========== ÅäÖÃÇøÓò ==========
-set GENERATE_COUNT=3
-:: ==============================
+# --- PowerShell æ ¸å¿ƒé€»è¾‘ ---
+$ErrorActionPreference = "SilentlyContinue"
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
-:MAIN_MENU
-cls
-echo ========================================
-echo              Ö÷²Ëµ¥
-echo ========================================
-echo   1. Éú³ÉUUID
-echo   2. Éú³ÉÃÜÂë
-echo   3. Ê±¼ä´Á
-echo   4. Ëæ»úÊı
-echo   0. ½áÊø½Å±¾
-echo ========================================
-echo.
-set "menu_choice="
-set /p "menu_choice=ÇëÑ¡Ôñ: "
+$GENERATE_COUNT = 3  # é»˜è®¤ç”Ÿæˆæ•°é‡
 
-if "%menu_choice%"=="1" goto UUID_MENU
-if "%menu_choice%"=="2" goto PASSWORD_MENU
-if "%menu_choice%"=="3" goto TIMESTAMP_MENU
-if "%menu_choice%"=="4" goto RANDOM_MENU
-if "%menu_choice%"=="0" (
-    echo.
-    echo ³ÌĞòÒÑ½áÊø¡£
-    timeout /t 1 /nobreak >nul
-    exit /b 0
-)
+function Show-Header($Title) {
+    Clear-Host
+    Write-Host "========================================" -ForegroundColor Cyan
+    Write-Host "          $Title" -ForegroundColor Cyan
+    Write-Host "========================================" -ForegroundColor Cyan
+}
 
-echo ÎŞĞ§Ñ¡Ôñ£¬ÇëÖØĞÂÊäÈë£¡
-timeout /t 1 /nobreak >nul
-goto MAIN_MENU
+function Main-Menu {
+    while ($true) {
+        Show-Header "å¼€å‘è€…å·¥å…·ç®± Pro - ä¸»èœå•"
+        Write-Host "  1. ç”Ÿæˆ UUID (v4)"
+        Write-Host "  2. ç”Ÿæˆéšæœºå¯†ç "
+        Write-Host "  3. è·å–æ—¶é—´æˆ³ (Unix)"
+        Write-Host "  4. ç”Ÿæˆéšæœºæ•°"
+        Write-Host "  5. Base64 ç¼–ç /è§£ç "
+        Write-Host "  6. æ–‡æœ¬å“ˆå¸Œ (MD5/SHA256)"
+        Write-Host "  7. ä¿®æ”¹ç”Ÿæˆæ•°é‡ (å½“å‰: $GENERATE_COUNT)"
+        Write-Host "  0. é€€å‡ºè„šæœ¬"
+        Write-Host "========================================"
+        
+        $choice = Read-Host "`nè¯·é€‰æ‹©"
+        switch ($choice) {
+            "1" { Generate-UUIDs }
+            "2" { Generate-Passwords }
+            "3" { Get-Timestamps }
+            "4" { Generate-RandomNumbers }
+            "5" { Base64-Codec }
+            "6" { Text-Hasher }
+            "7" { Set-Count }
+            "0" { exit }
+            default { Write-Host "æ— æ•ˆé€‰æ‹©ï¼Œè¯·é‡è¯•..." -ForegroundColor Red; Start-Sleep -Seconds 1 }
+        }
+    }
+}
 
-:UUID_MENU
-cls
-echo ========================================
-echo           Éú³ÉUUID (²»º¬Êı×Ö0,4)
-echo ========================================
+function Generate-UUIDs {
+    Show-Header "ç”Ÿæˆ UUID (æ ‡å‡† v4)"
+    $results = for ($i=1; $i -le $GENERATE_COUNT; $i++) {
+        $u = [guid]::NewGuid().ToString()
+        Write-Host "  $u" -ForegroundColor Green
+        $u
+    }
+    $results[0] | Set-Clipboard
+    Write-Host "`n[æç¤º] ç¬¬ä¸€æ¡ UUID å·²è‡ªåŠ¨å¤åˆ¶åˆ°å‰ªè´´æ¿ã€‚" -ForegroundColor Gray
+    Pause-Menu
+}
 
-:UUID_LOOP
-echo.
-echo °´»Ø³µ¼üÉú³É%GENERATE_COUNT%¸öËæ»úUUID£¬ÊäÈë0·µ»ØÖ÷²Ëµ¥
-set "input="
-set /p "input=^> "
+function Generate-Passwords {
+    Show-Header "ç”Ÿæˆéšæœºå¯†ç "
+    $inputLen = (Read-Host "è¯·è¾“å…¥å¯†ç é•¿åº¦ (é»˜è®¤ 16, èŒƒå›´ 8-128)").Trim()
+    $passwordLength = 16
+    if ($inputLen -match '^\d+$') {
+        $val = [int]$inputLen
+        if ($val -ge 8 -and $val -le 128) { $passwordLength = $val }
+    }
+    
+    $chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()-_=+[]{}|;:,.<>?"
+    $results = for ($i=1; $i -le $GENERATE_COUNT; $i++) {
+        $pass = -join ((1..$passwordLength) | ForEach-Object { $chars[(Get-Random -Minimum 0 -Maximum $chars.Length)] })
+        Write-Host "  $pass" -ForegroundColor Green
+        $pass
+    }
+    $results[0] | Set-Clipboard
+    Write-Host "`n[æç¤º] ç¬¬ä¸€æ¡å¯†ç å·²è‡ªåŠ¨å¤åˆ¶åˆ°å‰ªè´´æ¿ã€‚" -ForegroundColor Gray
+    Pause-Menu
+}
 
-if "%input%"=="0" goto MAIN_MENU
+function Base64-Codec {
+    Show-Header "Base64 ç¼–è§£ç "
+    Write-Host "  1. æ–‡æœ¬ -> Base64 (ç¼–ç )"
+    Write-Host "  2. Base64 -> æ–‡æœ¬ (è§£ç )"
+    $mode = Read-Host "`nè¯·é€‰æ‹©æ¨¡å¼ (1 æˆ– 2)"
+    $text = Read-Host "è¯·è¾“å…¥å†…å®¹"
+    if (-not $text) { return }
 
-echo.
+    try {
+        if ($mode -eq "1") {
+            $bytes = [System.Text.Encoding]::UTF8.GetBytes($text)
+            $res = [System.Convert]::ToBase64String($bytes)
+            Write-Host "`nç¼–ç ç»“æœ: " -NoNewline; Write-Host $res -ForegroundColor Green
+            $res | Set-Clipboard
+        } else {
+            $bytes = [System.Convert]::FromBase64String($text)
+            $res = [System.Text.Encoding]::UTF8.GetString($bytes)
+            Write-Host "`nè§£ç ç»“æœ: " -NoNewline; Write-Host $res -ForegroundColor Green
+            $res | Set-Clipboard
+        }
+        Write-Host "[æç¤º] ç»“æœå·²å¤åˆ¶åˆ°å‰ªè´´æ¿ã€‚" -ForegroundColor Gray
+    } catch {
+        Write-Host "`n[é”™è¯¯] ç¼–è§£ç å¤±è´¥ï¼Œè¯·æ£€æŸ¥è¾“å…¥æ ¼å¼ã€‚" -ForegroundColor Red
+    }
+    Pause-Menu
+}
 
-for /l %%i in (1,1,%GENERATE_COUNT%) do (
-    call :GenerateUUID
-    echo !UUID!
-)
+function Text-Hasher {
+    Show-Header "æ–‡æœ¬å“ˆå¸Œè®¡ç®— (UTF-8)"
+    $text = Read-Host "è¯·è¾“å…¥è¦è®¡ç®—çš„æ–‡æœ¬"
+    if (-not $text) { return }
 
-goto UUID_LOOP
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($text)
+    
+    $md5 = [System.Security.Cryptography.MD5]::Create()
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    
+    $getHashStr = {
+        param($alg, $data)
+        $hashBytes = $alg.ComputeHash($data)
+        return -join ($hashBytes | ForEach-Object { $_.ToString("x2") })
+    }
 
-:PASSWORD_MENU
-cls
-echo ========================================
-echo           Éú³ÉÃÜÂë
-echo ========================================
+    $hMD5 = &$getHashStr $md5 $bytes
+    $hSHA = &$getHashStr $sha256 $bytes
 
-:PASSWORD_INPUT
-echo.
-set "password_length="
-set /p "password_length=ÇëÊäÈëÃÜÂëÎ»Êı (8-64): "
-if "%password_length%"=="" goto PASSWORD_INPUT
-if %password_length% lss 8 (
-    echo ÃÜÂëÎ»Êı²»ÄÜĞ¡ÓÚ8£¡
-    timeout /t 1 /nobreak >nul
-    goto PASSWORD_INPUT
-)
-if %password_length% gtr 64 (
-    echo ÃÜÂëÎ»Êı²»ÄÜ´óÓÚ64£¡
-    timeout /t 1 /nobreak >nul
-    goto PASSWORD_INPUT
-)
+    Write-Host "`nMD5:    " -NoNewline; Write-Host $hMD5 -ForegroundColor Green
+    Write-Host "SHA256: " -NoNewline; Write-Host $hSHA -ForegroundColor Green
+    
+    $hSHA | Set-Clipboard
+    Write-Host "`n[æç¤º] SHA256 ç»“æœå·²å¤åˆ¶åˆ°å‰ªè´´æ¿ã€‚" -ForegroundColor Gray
+    Pause-Menu
+}
 
-goto PASSWORD_LOOP
+function Get-Timestamps {
+    Show-Header "æ—¶é—´æˆ³è·å–"
+    $now = Get-Date
+    $unix = [int]([DateTimeOffset]$now).ToUnixTimeSeconds()
+    $unixMs = [long]([DateTimeOffset]$now).ToUnixTimeMilliseconds()
+    
+    Write-Host "`næœ¬åœ°æ—¶é—´: " -NoNewline; Write-Host $now.ToString("yyyy-MM-dd HH:mm:ss") -ForegroundColor Green
+    Write-Host "Unix ç§’:  " -NoNewline; Write-Host $unix -ForegroundColor Green
+    Write-Host "Unix æ¯«ç§’: " -NoNewline; Write-Host $unixMs -ForegroundColor Green
+    
+    $unix.ToString() | Set-Clipboard
+    Write-Host "`n[æç¤º] Unix ç§’æˆ³å·²å¤åˆ¶åˆ°å‰ªè´´æ¿ã€‚" -ForegroundColor Gray
+    Pause-Menu
+}
 
-:PASSWORD_LOOP
-echo.
-echo µ±Ç°ÃÜÂëÎ»Êı: %password_length% Î»
-echo °´»Ø³µ¼üÉú³É%GENERATE_COUNT%¸öÃÜÂë£¬ÊäÈë0·µ»ØÖ÷²Ëµ¥£¬ÊäÈë6ÖØĞÂÉèÖÃÎ»Êı
-set "input="
-set /p "input=^> "
+function Generate-RandomNumbers {
+    Show-Header "ç”Ÿæˆéšæœºæ•°"
+    $rawMin = (Read-Host "è¯·è¾“å…¥æœ€å°å€¼ (é»˜è®¤ 1)").Trim()
+    $rawMax = (Read-Host "è¯·è¾“å…¥æœ€å¤§å€¼ (é»˜è®¤ 100)").Trim()
+    
+    $nMin = if ($rawMin -match '^-?\d+$') { [long]$rawMin } else { 1 }
+    $nMax = if ($rawMax -match '^-?\d+$') { [long]$rawMax } else { 100 }
+    
+    if ($nMax -le $nMin) { 
+        Write-Host "é”™è¯¯ï¼šæœ€å¤§å€¼å¿…é¡»å¤§äºæœ€å°å€¼ï¼" -ForegroundColor Red
+        Start-Sleep -Seconds 1; return 
+    }
 
-if "%input%"=="0" goto MAIN_MENU
-if "%input%"=="6" goto PASSWORD_INPUT
+    Write-Host "`nèŒƒå›´ [$nMin - $nMax] å†…çš„ $GENERATE_COUNT ä¸ªéšæœºæ•°:" -ForegroundColor Yellow
+    for ($i=1; $i -le $GENERATE_COUNT; $i++) {
+        $num = Get-Random -Minimum $nMin -Maximum ($nMax + 1)
+        Write-Host "  ç¬¬ $i ä¸ª: " -NoNewline; Write-Host $num -ForegroundColor Green
+    }
+    Pause-Menu
+}
 
-echo.
+function Set-Count {
+    $count = (Read-Host "è¯·è¾“å…¥æ¯æ¬¡ç”Ÿæˆçš„æ•°é‡ (å½“å‰: $GENERATE_COUNT)").Trim()
+    if ($count -match '^\d+$' -and [int]$count -gt 0) {
+        $script:GENERATE_COUNT = [int]$count
+        Write-Host "è®¾ç½®æˆåŠŸï¼" -ForegroundColor Green
+    } else {
+        Write-Host "è¾“å…¥æ— æ•ˆã€‚" -ForegroundColor Red
+    }
+    Start-Sleep -Seconds 1
+}
 
-for /l %%i in (1,1,%GENERATE_COUNT%) do (
-    call :GeneratePassword %password_length%
-    echo !PASSWORD!
-)
+function Pause-Menu {
+    Write-Host "`næŒ‰ä»»æ„é”®è¿”å›ä¸»èœå•..."
+    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+}
 
-goto PASSWORD_LOOP
-
-:GenerateUUID
-:: Ê¹ÓÃPowerShellÉú³É±ê×¼UUID v4
-for /f "delims=" %%u in ('powershell -command "[guid]::NewGuid().ToString()"') do set "UUID=%%u"
-
-:: ½«UUIDÖĞËùÓĞÊı×Ö4ºÍ0Ìæ»»Îª8
-set "UUID=%UUID:4=8%"
-set "UUID=%UUID:0=8%"
-
-goto :eof
-
-:GeneratePassword
-set "length=%1"
-set "PASSWORD="
-
-:: Ê¹ÓÃPowerShellÉú³ÉËæ»úÃÜÂë
-for /f "delims=" %%p in ('powershell -command "$chars='abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%%^&*()-_=+[]{}|;:'',.<>?/'; -join ((1..%length%) | ForEach-Object { $chars[(Get-Random -Minimum 0 -Maximum $chars.Length)] })"') do set "PASSWORD=%%p"
-
-goto :eof
-
-:TIMESTAMP_MENU
-cls
-echo ========================================
-echo           Ê±¼ä´Á¹¤¾ß
-echo ========================================
-
-:TIMESTAMP_LOOP
-echo.
-echo °´»Ø³µ¼ü»ñÈ¡µ±Ç°Ê±¼ä´Á£¬ÊäÈë0·µ»ØÖ÷²Ëµ¥
-set "input="
-set /p "input=^> "
-
-if "%input%"=="0" goto MAIN_MENU
-
-call :GetTimestamp
-echo µ±Ç°Ê±¼ä: !TIMESTAMP!
-echo UnixÊ±¼ä´Á: !UNIX_TIMESTAMP!
-
-goto TIMESTAMP_LOOP
-
-:RANDOM_MENU
-cls
-echo ========================================
-echo           Ëæ»úÊıÉú³É
-echo ========================================
-
-:RANDOM_INPUT_MIN
-echo.
-set "random_min="
-set /p "random_min=ÇëÊäÈë×îĞ¡Öµ: "
-if "%random_min%"=="" goto RANDOM_INPUT_MIN
-
-:RANDOM_INPUT_MAX
-set "random_max="
-set /p "random_max=ÇëÊäÈë×î´óÖµ: "
-if "%random_max%"=="" goto RANDOM_INPUT_MAX
-if %random_max% leq %random_min% (
-    echo ×î´óÖµ±ØĞë´óÓÚ×îĞ¡Öµ£¡
-    timeout /t 1 /nobreak >nul
-    goto RANDOM_INPUT_MAX
-)
-
-:RANDOM_LOOP
-echo.
-echo ·¶Î§: %random_min% - %random_max%
-echo °´»Ø³µ¼üÉú³É%GENERATE_COUNT%×éËæ»úÊı£¬ÊäÈë0·µ»ØÖ÷²Ëµ¥£¬ÊäÈë6ÖØĞÂÉèÖÃ·¶Î§
-set "input="
-set /p "input=^> "
-
-if "%input%"=="0" goto MAIN_MENU
-if "%input%"=="6" goto RANDOM_INPUT_MIN
-
-for /l %%i in (1,1,%GENERATE_COUNT%) do (
-    call :GetRandom %random_min% %random_max%
-    echo µÚ%%i×é: !RANDOM_NUM!
-)
-
-goto RANDOM_LOOP
-
-:GetTimestamp
-for /f "delims=" %%t in ('powershell -command "Get-Date -Format 'yyyy-MM-dd HH:mm:ss'"') do set "TIMESTAMP=%%t"
-for /f "delims=" %%u in ('powershell -command "$epoch = New-Object DateTime(1970,1,1,0,0,0,[DateTimeKind]::Utc); [int]((Get-Date).ToUniversalTime() - $epoch).TotalSeconds"') do set "UNIX_TIMESTAMP=%%u"
-goto :eof
-
-:GetRandom
-set /a "RANDOM_NUM=!RANDOM! %% (%2 - %1 + 1) + %1"
-goto :eof
+# å¯åŠ¨ä¸»èœå•
+Main-Menu
