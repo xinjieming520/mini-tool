@@ -1,6 +1,6 @@
 <# :
 @echo off
-title 开发者实用工具箱 - Generator Pro
+title Generator
 :: 以绕过策略的方式启动内部 PowerShell 脚本
 powershell -NoProfile -ExecutionPolicy Bypass -Command "iex ((Get-Content '%~f0' -Encoding UTF8) -join [Environment]::NewLine)"
 exit /b
@@ -21,7 +21,7 @@ function Show-Header($Title) {
 
 function Main-Menu {
     while ($true) {
-        Show-Header "开发者工具箱 Pro - 主菜单"
+        Show-Header "开发者工具箱 - 主菜单"
         Write-Host "  1. 生成 UUID (v4)"
         Write-Host "  2. 生成随机密码"
         Write-Host "  3. 获取时间戳 (Unix)"
