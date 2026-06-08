@@ -1,4 +1,4 @@
-﻿# UV 环境管理工具 v2.1.0 (PowerShell Version)
+# UV 环境管理工具 v2.2.1 (PowerShell Version)
 # 功能：安装、更新、卸载 UV，配置镜像源和缓存路径。
 # 仅支持 Windows 系统。
 
@@ -19,7 +19,9 @@ $MIRROR_PRESETS = @{
 function Get-UVVersion {
     try {
         $version = uv --version 2>$null
-        if ($LASTEXITCODE -eq 0) { return ($version -replace 'uv ', '').Trim() }
+        if ($LASTEXITCODE -eq 0) {
+            return ($version -replace 'uv ', '').Trim()
+        }
     } catch {}
     return "未安装"
 }
@@ -38,15 +40,20 @@ function Refresh-Path {
 function Broadcast-EnvChange {
     $signature = '[DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
     public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, IntPtr wParam, string lParam, uint fuFlags, uint uTimeout, out IntPtr lpdwResult);'
-    $type = Add-Type -MemberDefinition $signature -Name "Win32" -Namespace "Env" -PassThru -ErrorAction SilentlyContinue
-    if ($null -eq $type) { $type = [Env.Win32] }
+    
+    # 防止重复加载类型导致的错误
+    if (-not ([System.Management.Automation.PSTypeName]'Env.Win32').Type) {
+        Add-Type -MemberDefinition $signature -Name "Win32" -Namespace "Env" -ErrorAction SilentlyContinue | Out-Null
+    }
+    
     $result = [IntPtr]::Zero
-    $type::SendMessageTimeout([IntPtr]0xffff, 0x001A, [IntPtr]::Zero, "Environment", 0x0002, 5000, [out]$result) | Out-Null
+    [Env.Win32]::SendMessageTimeout([IntPtr]0xffff, 0x001A, [IntPtr]::Zero, "Environment", 0x0002, 5000, [ref]$result) | Out-Null
 }
 
 function Set-PersistentEnvVar {
     param($Name, $Value)
     [Environment]::SetEnvironmentVariable($Name, $Value, "User")
+    # 设置当前进程变量
     Set-Content -Path "Env:\$Name" -Value $Value
     Broadcast-EnvChange
     Write-Host "`n >> $Name = $Value" -ForegroundColor Cyan
@@ -65,35 +72,42 @@ function Display-Header {
     Clear-Host
     $uvVer = Get-UVVersion
     $uvPath = Get-UVPath
-    $mirror = if ($env:UV_DEFAULT_INDEX) { $env:UV_DEFAULT_INDEX } else { "未设置 (使用默认)" }
-    $cache = if ($env:UV_CACHE_DIR) { $env:UV_CACHE_DIR } else { "未设置 (使用默认)" }
+    
+    $mirror = $env:UV_DEFAULT_INDEX
+    if (-not $mirror) { $mirror = "未设置 (使用默认)" }
+    
+    $cache = $env:UV_CACHE_DIR
+    if (-not $cache) { $cache = "未设置 (使用默认)" }
 
     Write-Host @"
 
     ┌──────────────────────────────────────────────────────────────┐
-    │                🚀 UV 环境管理工具 v2.2.0 (PS)                │
+    │                🚀 UV 环境管理工具 v2.2.1 (PS)                │
     └──────────────────────────────────────────────────────────────┘
 "@ -ForegroundColor Cyan
 
     Write-Host "  [ 系统信息 ]" -ForegroundColor DarkGray
     Write-Host "  💻 操作系统: " -NoNewline; Write-Host "Windows $([Environment]::OSVersion.VersionString)" -ForegroundColor White
-    $color = if ($uvVer -eq "未安装") { "Red" } else { "Green" }
-    Write-Host "  🛠️  UV 版本:  " -NoNewline; Write-Host $uvVer -ForegroundColor $color
+    
+    $verColor = "Green"
+    if ($uvVer -eq "未安装") { $verColor = "Red" }
+    Write-Host "  🛠️  UV 版本:  " -NoNewline; Write-Host $uvVer -ForegroundColor $verColor
+    
     Write-Host "  📂 UV 路径:  " -NoNewline; Write-Host $uvPath -ForegroundColor Gray
     Write-Host "  🌐 镜像源:   " -NoNewline; Write-Host $mirror -ForegroundColor Yellow
     Write-Host "  📦 缓存路径: " -NoNewline; Write-Host $cache -ForegroundColor Yellow
-    Write-Host "  " + ("─" * 60) -ForegroundColor DarkGray
+    Write-Host ("  " + ("─" * 60)) -ForegroundColor DarkGray
 }
 
 function Display-Menu {
     Write-Host "  [ 操作菜单 ]" -ForegroundColor DarkGray
-    Write-Host "  1. 📥 安装 uv" -ForegroundColor White
-    Write-Host "  2. 🔄 更新 uv" -ForegroundColor White
-    Write-Host "  3. 🗑️ 卸载 uv" -ForegroundColor White
+    Write-Host "  1. 📥 安装 UV" -ForegroundColor White
+    Write-Host "  2. 🔄 更新 UV" -ForegroundColor White
+    Write-Host "  3. 🗑️  卸载 UV" -ForegroundColor White
     Write-Host "  4. 🚀 配置镜像源" -ForegroundColor White
     Write-Host "  5. 💾 配置缓存路径" -ForegroundColor White
     Write-Host "  0. ❌ 退出程序" -ForegroundColor Red
-    Write-Host "  " + ("─" * 60) -ForegroundColor DarkGray
+    Write-Host ("  " + ("─" * 60)) -ForegroundColor DarkGray
 }
 
 function Write-Status {
@@ -119,7 +133,8 @@ function Install-UV {
             Refresh-Path
         }
         "2" {
-            $pipIndex = if ($env:UV_DEFAULT_INDEX) { $env:UV_DEFAULT_INDEX } else { $DEFAULT_PIP_INDEX_URL }
+            $pipIndex = $env:UV_DEFAULT_INDEX
+            if (-not $pipIndex) { $pipIndex = $DEFAULT_PIP_INDEX_URL }
             python -m pip install --upgrade uv -i $pipIndex
         }
         "3" {
@@ -129,9 +144,9 @@ function Install-UV {
     }
 
     if ($LASTEXITCODE -eq 0) {
-        Write-Status "UV 安装成功！" "Green"
+        Write-Status "UV 安装流程执行完毕。" "Green"
     } else {
-        Write-Status "安装过程可能未完全成功，请检查上方输出。" "Yellow"
+        Write-Status "安装过程可能出现问题，请检查上方日志。" "Yellow"
     }
 }
 
@@ -157,7 +172,8 @@ function Update-UV {
         "1" { uv self update }
         "2" { powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://astral.sh/uv/install.ps1 | iex" }
         "3" { 
-            $pipIndex = if ($env:UV_DEFAULT_INDEX) { $env:UV_DEFAULT_INDEX } else { $DEFAULT_PIP_INDEX_URL }
+            $pipIndex = $env:UV_DEFAULT_INDEX
+            if (-not $pipIndex) { $pipIndex = $DEFAULT_PIP_INDEX_URL }
             python -m pip install --upgrade uv -i $pipIndex 
         }
         "4" { winget upgrade -e --id astral-sh.uv --accept-package-agreements --accept-source-agreements }
@@ -234,9 +250,10 @@ function Uninstall-UV {
 function Configure-Index {
     Display-Header
     Write-Host "  [ 配置镜像源 ]" -ForegroundColor Cyan
-    $MIRROR_PRESETS.Keys | Sort-Object | ForEach-Object {
-        Write-Host "  $_. $($MIRROR_PRESETS[$_][0])" -ForegroundColor Gray
-        Write-Host "     $($MIRROR_PRESETS[$_][1])" -ForegroundColor DarkGray
+    $sortedKeys = $MIRROR_PRESETS.Keys | Sort-Object
+    foreach ($key in $sortedKeys) {
+        Write-Host "  $key. $($MIRROR_PRESETS[$key][0])" -ForegroundColor Gray
+        Write-Host "     $($MIRROR_PRESETS[$key][1])" -ForegroundColor DarkGray
     }
     Write-Host "  0. 自定义 URL"
     Write-Host "  b. 返回主菜单"
@@ -260,7 +277,10 @@ function Configure-Index {
 function Configure-Cache {
     Display-Header
     Write-Host "  [ 配置缓存路径 ]" -ForegroundColor Cyan
-    $current = if ($env:UV_CACHE_DIR) { $env:UV_CACHE_DIR } else { $DEFAULT_CACHE_DIR }
+    
+    $current = $env:UV_CACHE_DIR
+    if (-not $current) { $current = $DEFAULT_CACHE_DIR }
+    
     Write-Host "  当前路径: $current" -ForegroundColor Gray
     
     $value = Read-Host "`n  请输入新的缓存路径 (直接回车保持默认)"
