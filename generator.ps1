@@ -42,7 +42,7 @@ function Main-Menu {
                 if ([int]$char -gt 255) { $visualWidth += 2 } else { $visualWidth += 1 }
             }
             
-            # 设置对齐基准宽度为 24
+            # 设置对齐基准宽度
             $pad = 20 - $visualWidth
             if ($pad -lt 1) { $pad = 1 }
             $spaces = " " * $pad
