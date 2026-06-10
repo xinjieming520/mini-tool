@@ -15,21 +15,47 @@ function Show-Header($Title) {
 function Main-Menu {
     while ($true) {
         Show-Header "开发者工具箱 - 主菜单"
-        Write-Host "  1. 生成 UUID (v4)"
-        Write-Host "  2. 生成随机密码"
-        Write-Host "  3. 获取时间戳 (Unix)"
-        Write-Host "  4. 生成随机数"
-        Write-Host "  5. Base64 编码/解码"
-        Write-Host "  6. 文本哈希 (MD5/SHA256)"
-        Write-Host "  7. 获取本机内外网 IP"
-        Write-Host "  8. 常用端口连通性检查"
-        Write-Host "  9. Cron 表达式解释器 (基础)"
-        Write-Host "  10. 颜色代码转换 (HEX/RGB)"
-        Write-Host "  11. 修改生成数量 (当前: $GENERATE_COUNT)"
-        Write-Host "  0. 退出脚本"
+        
+        # 定义菜单项: 序号, 名称, 说明
+        $items = @(
+            ("1",  "生成 UUID (v4)",      "标准 v4 格式，自动复制"),
+            ("2",  "生成随机密码",       "支持自定义长度与字符集"),
+            ("3",  "获取时间戳 (Unix)",   "获取秒与毫秒级时间戳"),
+            ("4",  "生成随机数",         "自定义范围内的随机数值"),
+            ("5",  "Base64 编码/解码",   "UTF-8 文本双向转换"),
+            ("6",  "文本哈希计算",       "计算 MD5 与 SHA256 值"),
+            ("7",  "本机内外网 IP",      "查询网卡信息与公网 IP (v4/v6)"),
+            ("8",  "端口连通性检查",     "测试远程或本地 TCP 端口"),
+            ("9",  "Cron 表达式解释",    "解析 5 位标准 Cron 含义"),
+            ("10", "颜色代码转换",       "HEX 与 RGB 颜色互转"),
+            ("11", "修改生成数量",       "当前设置: $GENERATE_COUNT 条"),
+            ("0",  "退出脚本",           "结束并关闭工具箱")
+        )
+
+        foreach ($i in $items) {
+            $idx = $i[0].PadLeft(2)
+            $name = $i[1]
+            
+            # 精确计算视觉宽度 (中文字符计 2 个单位，英文字符计 1 个单位)
+            $visualWidth = 0
+            foreach ($char in $name.ToCharArray()) {
+                if ([int]$char -gt 255) { $visualWidth += 2 } else { $visualWidth += 1 }
+            }
+            
+            # 设置对齐基准宽度为 24
+            $pad = 24 - $visualWidth
+            if ($pad -lt 1) { $pad = 1 }
+            $spaces = " " * $pad
+            
+            Write-Host "  $idx. " -NoNewline -ForegroundColor Cyan
+            Write-Host "$name" -NoNewline -ForegroundColor Green
+            Write-Host "$($spaces)" -NoNewline
+            Write-Host "$($i[2])" -ForegroundColor Gray
+        }
+
         Write-Host "========================================"
         
-        $choice = Read-Host "`n请选择"
+        $choice = (Read-Host "`n请选择功能序号").Trim()
         switch ($choice) {
             "1" { Generate-UUIDs }
             "2" { Generate-Passwords }
@@ -43,7 +69,7 @@ function Main-Menu {
             "10" { Convert-ColorCode }
             "11" { Set-Count }
             "0" { exit }
-            default { Write-Host "无效选择，请重试..." -ForegroundColor Red; Start-Sleep -Seconds 1 }
+            default { Write-Host "无效选择 [$choice]，请重新输入..." -ForegroundColor Red; Start-Sleep -Seconds 1 }
         }
     }
 }
