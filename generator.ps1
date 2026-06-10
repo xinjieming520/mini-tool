@@ -7,9 +7,9 @@ $GENERATE_COUNT = 3  # 默认生成数量
 
 function Show-Header($Title) {
     Clear-Host
-    Write-Host "========================================" -ForegroundColor Cyan
+    Write-Host "====================================================" -ForegroundColor Cyan
     Write-Host "          $Title" -ForegroundColor Cyan
-    Write-Host "========================================" -ForegroundColor Cyan
+    Write-Host "====================================================" -ForegroundColor Cyan
 }
 
 function Main-Menu {
@@ -18,18 +18,18 @@ function Main-Menu {
         
         # 定义菜单项: 序号, 名称, 说明
         $items = @(
-            ("1",  "生成 UUID (v4)",      "标准 v4 格式，自动复制"),
+            ("1",  "生成UUID(v4)",      "标准v4格式，自动复制"),
             ("2",  "生成随机密码",       "支持自定义长度与字符集"),
-            ("3",  "获取时间戳 (Unix)",   "获取秒与毫秒级时间戳"),
+            ("3",  "获取时间戳(Unix)",   "获取秒与毫秒级时间戳"),
             ("4",  "生成随机数",         "自定义范围内的随机数值"),
-            ("5",  "Base64 编码/解码",   "UTF-8 文本双向转换"),
-            ("6",  "文本哈希计算",       "计算 MD5 与 SHA256 值"),
-            ("7",  "本机内外网 IP",      "查询网卡信息与公网 IP (v4/v6)"),
-            ("8",  "端口连通性检查",     "测试远程或本地 TCP 端口"),
-            ("9",  "Cron 表达式解释",    "解析 5 位标准 Cron 含义"),
-            ("10", "颜色代码转换",       "HEX 与 RGB 颜色互转"),
+            ("5",  "Base64编码/解码",   "UTF-8文本双向转换"),
+            ("6",  "文本哈希计算",       "计算MD5与SHA256值"),
+            ("7",  "本机内外网IP",      "查询网卡信息与公网IP(v4/v6)"),
+            ("8",  "本地端口占用检查",   "查看本地端口及关联进程"),
+            ("9",  "Cron表达式解释",    "解析5位标准Cron含义"),
+            ("10", "颜色代码转换",       "HEX与RGB颜色互转"),
             ("11", "修改生成数量",       "当前设置: $GENERATE_COUNT 条"),
-            ("0",  "退出脚本",           "结束并关闭工具箱")
+            ("0",  "退出脚本",           "关闭工具箱")
         )
 
         foreach ($i in $items) {
@@ -43,7 +43,7 @@ function Main-Menu {
             }
             
             # 设置对齐基准宽度为 24
-            $pad = 24 - $visualWidth
+            $pad = 20 - $visualWidth
             if ($pad -lt 1) { $pad = 1 }
             $spaces = " " * $pad
             
@@ -53,7 +53,7 @@ function Main-Menu {
             Write-Host "$($i[2])" -ForegroundColor Gray
         }
 
-        Write-Host "========================================"
+        Write-Host "===================================================="
         
         $choice = (Read-Host "`n请选择功能序号").Trim()
         switch ($choice) {
@@ -64,7 +64,7 @@ function Main-Menu {
             "5" { Base64-Codec }
             "6" { Text-Hasher }
             "7" { Get-IPAddresses }
-            "8" { Test-PortConnection }
+            "8" { Test-LocalPort }
             "9" { Explain-CronExpression }
             "10" { Convert-ColorCode }
             "11" { Set-Count }
@@ -261,20 +261,41 @@ function Get-IPAddresses {
     Pause-Menu
 }
 
-function Test-PortConnection {
-    Show-Header "常用端口连通性检查"
-    $target = (Read-Host "请输入目标地址 (默认 127.0.0.1)").Trim()
-    if (-not $target) { $target = "127.0.0.1" }
-    $portInput = (Read-Host "请输入端口号 (例如 80, 443, 3306)").Trim()
+function Test-LocalPort {
+    Show-Header "本地端口占用检查"
+    $portInput = (Read-Host "请输入要检查的本地端口号").Trim()
     
     if ($portInput -match '^\d+$') {
         $port = [int]$portInput
-        Write-Host "`n正在测试 $target : $port ..." -ForegroundColor Gray
-        $res = Test-NetConnection -ComputerName $target -Port $port -WarningAction SilentlyContinue
-        if ($res.TcpTestSucceeded) {
-            Write-Host "  [成功] 端口已开放！" -ForegroundColor Green
+        Write-Host "`n正在检查本地端口 $port ..." -ForegroundColor Gray
+        
+        # 获取连接信息
+        $connection = Get-NetTCPConnection -LocalPort $port -ErrorAction SilentlyContinue | Select-Object -First 1
+        
+        if ($connection) {
+            $pid = $connection.OwningProcess
+            $proc = Get-Process -Id $pid -ErrorAction SilentlyContinue
+            $procName = if ($proc) { $proc.ProcessName } else { "未知进程" }
+            
+            Write-Host "  [占用] 端口 $port 正在被使用。" -ForegroundColor Yellow
+            Write-Host "  进程名称: " -NoNewline; Write-Host $procName -ForegroundColor Green
+            Write-Host "  进程 PID: " -NoNewline; Write-Host $pid -ForegroundColor Green
+            
+            # 提示是否解除占用
+            $confirm = Read-Host "`n是否终止该进程以释放端口? (Y/N)"
+            if ($confirm -eq "Y" -or $confirm -eq "y") {
+                try {
+                    Stop-Process -Id $pid -Force -ErrorAction Stop
+                    Write-Host "  [成功] 进程已终止，端口 $port 已释放。" -ForegroundColor Green
+                } catch {
+                    Write-Host "  [失败] 无法终止进程。请尝试以管理员权限运行脚本。" -ForegroundColor Red
+                }
+            } else {
+                $pid.ToString() | Set-Clipboard
+                Write-Host "  [提示] 操作已取消。PID 已复制到剪贴板。" -ForegroundColor Gray
+            }
         } else {
-            Write-Host "  [失败] 端口未开放或无法访问。" -ForegroundColor Red
+            Write-Host "  [可用] 端口 $port 目前未被占用。" -ForegroundColor Green
         }
     } else {
         Write-Host "无效的端口号。" -ForegroundColor Red
