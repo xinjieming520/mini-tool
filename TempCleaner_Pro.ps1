@@ -10,7 +10,10 @@ $CutoffDate = (Get-Date).AddDays(-$DaysToKeep)
 
 function Clean-Routine($Path, $Name, $Exclude = @(), $IgnoreAge = $false) {
     Write-Host "------------------------------------------------------------" -ForegroundColor DarkGray
-    Write-Host "[状态] 正在处理: " -NoNewline; Write-Host $Name -ForegroundColor White -BackgroundColor Blue
+    Write-Host "[状态] " -NoNewline -ForegroundColor Gray
+    Write-Host "正在处理: " -NoNewline
+    Write-Host " $Name " -ForegroundColor White -BackgroundColor Blue -NoNewline
+    Write-Host "" # 显式换行，防止背景色溢出到下一行
     
     $targetPath = [System.Environment]::ExpandEnvironmentVariables($Path)
     if (-not (Test-Path $targetPath)) {
