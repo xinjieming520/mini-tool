@@ -174,21 +174,64 @@ function Get-IPAddresses {
     Show-Header "本机内外网 IP 获取"
     Write-Host "正在查询，请稍候..." -ForegroundColor Gray
     
-    # 内网 IP
-    $localIPs = Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.InterfaceAlias -notmatch 'Loopback|VirtualBox|VMware' } | Select-Object -ExpandProperty IPAddress
-    Write-Host "`n内网 IPv4 地址:" -ForegroundColor Yellow
-    foreach ($ip in $localIPs) { Write-Host "  $ip" -ForegroundColor Green }
-
-    # 外网 IP
-    try {
-        $publicIP = (Invoke-RestMethod -Uri "https://api.ipify.org" -TimeoutSec 5).Trim()
-        Write-Host "`n外网 IP 地址:" -ForegroundColor Yellow
-        Write-Host "  $publicIP" -ForegroundColor Green
-        $publicIP | Set-Clipboard
-        Write-Host "`n[提示] 外网 IP 已复制到剪贴板。" -ForegroundColor Gray
-    } catch {
-        Write-Host "`n[错误] 无法获取外网 IP，请检查网络连接。" -ForegroundColor Red
+    # 内网 IP (显示网卡名称)
+    $localIPs = Get-NetIPAddress | 
+                Where-Object { $_.InterfaceAlias -notmatch 'Loopback|VirtualBox|VMware' -and $_.IPAddress -notlike '169.254.*' -and $_.IPAddress -notlike 'fe80*' } | 
+                Select-Object IPAddress, AddressFamily, InterfaceAlias
+    
+    Write-Host "`n内网地址:" -ForegroundColor Yellow
+    if ($localIPs) {
+        foreach ($ip in $localIPs) { 
+            $type = if ($ip.AddressFamily -eq 'IPv6') { "[IPv6]" } else { "[IPv4]" }
+            $alias = "($($ip.InterfaceAlias))"
+            Write-Host "  $($type.PadRight(6)) $($ip.IPAddress.PadRight(40)) $($alias)" -ForegroundColor Green 
+        }
+    } else {
+        Write-Host "  未找到有效的内网地址。" -ForegroundColor Gray
     }
+
+    # 外网 IP (支持 IPv4 和 IPv6)
+    $publicIPv4 = $null
+    $publicIPv6 = $null
+    
+    $v4Urls = @("https://api4.ipify.org", "https://ifconfig.me/ip")
+    $v6Urls = @("https://api6.ipify.org", "https://v6.ident.me")
+    
+    # 尝试获取 IPv4
+    foreach ($url in $v4Urls) {
+        try {
+            $publicIPv4 = (Invoke-RestMethod -Uri $url -TimeoutSec 2).Trim()
+            if ($publicIPv4 -match '^\d+\.\d+\.\d+\.\d+$') { break }
+        } catch { continue }
+    }
+
+    # 尝试获取 IPv6
+    foreach ($url in $v6Urls) {
+        try {
+            $publicIPv6 = (Invoke-RestMethod -Uri $url -TimeoutSec 2).Trim()
+            if ($publicIPv6 -match ':') { break }
+        } catch { continue }
+    }
+
+    Write-Host "`n外网地址:" -ForegroundColor Yellow
+    if ($publicIPv4) {
+        Write-Host "  [IPv4] $publicIPv4" -ForegroundColor Green
+        $publicIPv4 | Set-Clipboard
+    } else {
+        Write-Host "  [IPv4] 获取失败" -ForegroundColor Red
+    }
+
+    if ($publicIPv6) {
+        Write-Host "  [IPv6] $publicIPv6" -ForegroundColor Green
+        if (-not $publicIPv4) { $publicIPv6 | Set-Clipboard }
+    } else {
+        Write-Host "  [IPv6] 未检测到或获取失败" -ForegroundColor Gray
+    }
+
+    if ($publicIPv4 -or $publicIPv6) {
+        Write-Host "`n[提示] IPv4 (或 IPv6) 已复制到剪贴板。" -ForegroundColor Gray
+    }
+    
     Pause-Menu
 }
 
