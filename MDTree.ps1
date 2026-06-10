@@ -1,4 +1,4 @@
-# --- PowerShell 脚本逻辑开始 ---
+﻿# --- PowerShell 脚本逻辑开始 ---
 $Host.UI.RawUI.WindowTitle = "MDTree - 开发者工具箱"
 $ErrorActionPreference = "SilentlyContinue"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -22,6 +22,7 @@ function Main-Menu {
             ("1", "增强目录树生成", "生成带大小/日期的 MD & HTML 视图"),
             ("2", "JSON 格式化/压缩", "美化或压缩本地 JSON 文件"),
             ("3", "图片转 Base64", "将图片转换为 Base64 编码文本"),
+            ("4", "数据格式转换", "CSV/XML/JSON 互转及 MD 表格生成"),
             ("0", "退出脚本", "关闭工具")
         )
 
@@ -43,6 +44,7 @@ function Main-Menu {
             "1" { Start-TreeGen-Enhanced }
             "2" { Start-JsonTool }
             "3" { Convert-ImageToBase64 }
+            "4" { Start-DataConvert }
             "0" { exit }
             default { Write-Host "无效选择 [$choice]，请重试..." -ForegroundColor Red; Start-Sleep -Seconds 1 }
         }
@@ -131,6 +133,63 @@ function Start-JsonTool {
         $result | Set-Content -Path $newPath -Encoding UTF8
         Write-Host "`n[成功] 保存至: $newPath" -ForegroundColor Green
     } catch { Write-Host "`n[错误] 处理失败。" -ForegroundColor Red }
+    Pause-Menu
+}
+
+# --- 数据格式转换逻辑 ---
+function Start-DataConvert {
+    Show-Header "数据格式转换"
+    Write-Host "  1. CSV -> JSON"
+    Write-Host "  2. CSV -> Markdown 表格"
+    Write-Host "  3. XML -> JSON"
+    Write-Host "  4. JSON -> XML"
+    $mode = Read-Host "`n请选择转换模式"
+    
+    $filePath = (Read-Host "请输入源文件完整路径").Trim()
+    if (-not (Test-Path $filePath)) { Write-Host "错误：文件不存在！" -ForegroundColor Red; Pause-Menu; return }
+
+    try {
+        switch ($mode) {
+            "1" {
+                $data = Import-Csv -Path $filePath
+                $result = $data | ConvertTo-Json -Depth 100
+                $newPath = [System.IO.Path]::ChangeExtension($filePath, ".json")
+                $result | Set-Content -Path $newPath -Encoding UTF8
+            }
+            "2" {
+                $data = Import-Csv -Path $filePath
+                $headers = $data[0].psobject.Properties.Name
+                $md = "| " + ($headers -join " | ") + " |`r`n"
+                $md += "| " + (($headers | ForEach-Object { "---" }) -join " | ") + " |`r`n"
+                foreach ($row in $data) {
+                    $values = foreach ($h in $headers) { $row.$h }
+                    $md += "| " + ($values -join " | ") + " |`r`n"
+                }
+                $newPath = [System.IO.Path]::ChangeExtension($filePath, ".md")
+                $md | Set-Content -Path $newPath -Encoding UTF8
+            }
+            "3" {
+                [xml]$xml = Get-Content -Path $filePath
+                $result = $xml | ConvertTo-Json -Depth 100
+                $newPath = [System.IO.Path]::ChangeExtension($filePath, ".json")
+                $result | Set-Content -Path $newPath -Encoding UTF8
+            }
+            "4" {
+                $json = Get-Content -Path $filePath -Raw | ConvertFrom-Json
+                # 使用更通用的方法生成 XML，兼容 PowerShell 5.1
+                $xmlObj = $json | ConvertTo-Xml -As Document
+                $result = $xmlObj.OuterXml
+                $newPath = [System.IO.Path]::ChangeExtension($filePath, ".xml")
+                $result | Set-Content -Path $newPath -Encoding UTF8
+            }
+            default { Write-Host "无效选择。" -ForegroundColor Red; return }
+        }
+        Write-Host "`n[成功] 转换完成！" -ForegroundColor Green
+        Write-Host "已保存至: $newPath" -ForegroundColor Gray
+    } catch {
+        Write-Host "`n[错误] 转换失败，请检查文件格式是否正确。" -ForegroundColor Red
+        Write-Host "详情: $($_.Exception.Message)" -ForegroundColor DarkGray
+    }
     Pause-Menu
 }
 
