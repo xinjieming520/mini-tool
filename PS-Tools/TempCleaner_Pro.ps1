@@ -1,4 +1,4 @@
-# --- PowerShell 脚本逻辑开始 ---
+﻿# --- PowerShell 脚本逻辑开始 ---
 $Host.UI.RawUI.WindowTitle = "TempCleaner_Pro - 安全专家清理工具"
 $ErrorActionPreference = "SilentlyContinue"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8

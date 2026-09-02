@@ -1,4 +1,4 @@
-# ConvertTxtToBase64.ps1
+﻿# ConvertTxtToBase64.ps1
 # 功能：列出当前目录下所有TXT文件，经用户确认后转换为Base64编码格式并另存
 
 # 设置脚本运行目录为当前所在目录
