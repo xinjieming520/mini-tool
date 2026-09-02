@@ -3,9 +3,10 @@
 #
 #  设计要点：
 #   - 全程使用 .NET RegistryKey API（异常可被 try/catch 捕获，且支持 Registry64 视图）
-#   - 只操作 ShellNew 子键，绝不改动文件关联（ProgID），避免覆盖系统类型描述
 #   - 默认写入 HKCU\Software\Classes（仅当前用户，免管理员）；管理员可写入 HKLM
-#   - 显示名称通过 ShellNew\MenuText 指定（Windows 自身即采用此值）
+#   - 显示名称：写入 ShellNew\MenuText，并在扩展名无关联时新建独立命名空间的 ProgID
+#     （实测仅写 MenuText 不生效——新建菜单要求条目具备文件类型关联）
+#   - 绝不覆盖已有关联：扩展名已有 ProgID 时原样保留，避免破坏系统类型描述
 # ============================================================================
 
 $ErrorActionPreference = 'Continue'
@@ -17,6 +18,10 @@ $script:ClassesPath   = 'Software\Classes'
 $script:RegistryView  = [Microsoft.Win32.RegistryView]::Registry64
 $script:ShellApiType  = $null
 $script:ShellApiTried = $false
+
+# 自建 ProgID 的命名空间前缀。不能用 "<扩展名>file"（实测 .png/.bat/.html/.js/.xml
+# 等 9 个常见扩展名会与系统已有 ProgID 撞名并被覆盖），改用独立前缀避免冲突。
+$script:ProgIdPrefix  = 'NewMenuMgr.'
 
 # ShellNew 中表示"建文件方式"的值，互斥。写入新策略前必须先清空，
 # 否则旧的 NullFile 会让新设的 FileName/Data 被系统忽略。
@@ -286,10 +291,13 @@ function Add-NewMenuItem {
     }
 
     # ---- 写入 ----
-    $base    = $null
-    $classes = $null
-    $snKey   = $null
-    $ok      = $false
+    $base        = $null
+    $classes     = $null
+    $snKey       = $null
+    $hkcr        = $null
+    $ok          = $false
+    $assocStatus = 'unknown'   # created / existing
+    $createdId   = $null
     try {
         $base    = Get-BaseKey -Scope $scope
         $classes = $base.CreateSubKey($script:ClassesPath)   # 无权限时抛 UnauthorizedAccessException
@@ -306,7 +314,49 @@ function Add-NewMenuItem {
         } else {
             $snKey.SetValue('NullFile', '', [Microsoft.Win32.RegistryValueKind]::String)
         }
+        # MenuText 是 Windows 自身用于新建菜单文案的值（.lnk/.contact 在用）。
+        # 实测仅靠它不足以让条目出现，但作为显示名的补充手段一并写入。
         $snKey.SetValue('MenuText', $displayName, [Microsoft.Win32.RegistryValueKind]::String)
+
+        # ---- 关键：建立文件类型关联 ----
+        # MS 文档（Extending the New Submenu）明确要求条目必须具备文件类型关联；
+        # 实测本机所有生效的 NullFile 条目都有 ProgID，唯一无关联的条目不在菜单中显示。
+        # 因此：扩展名当前无关联时，新建一个独立命名空间的 ProgID 并指向它。
+        # 已有关联则原样保留，绝不覆盖（否则会破坏系统类型描述与打开方式）。
+        $existingAssoc = $null
+        $mergedExt     = $null
+        $hkcr          = Get-BaseKey -Scope 'HKCR'
+        try {
+            $mergedExt = $hkcr.OpenSubKey($ext)
+            if ($null -ne $mergedExt) { $existingAssoc = $mergedExt.GetValue('') }
+        } catch {
+            $existingAssoc = $null
+        } finally {
+            if ($null -ne $mergedExt) { $mergedExt.Close() }
+        }
+
+        if ([string]::IsNullOrWhiteSpace($existingAssoc)) {
+            $progId  = $script:ProgIdPrefix + $ext.TrimStart('.')
+            $progKey = $null
+            $extKey  = $null
+            try {
+                $progKey = $classes.CreateSubKey($progId)
+                if ($null -eq $progKey) { throw "无法创建 ProgID $progId" }
+                $progKey.SetValue('', $displayName, [Microsoft.Win32.RegistryValueKind]::String)
+
+                $extKey = $classes.CreateSubKey($ext)
+                if ($null -eq $extKey) { throw "无法打开 $ext" }
+                $extKey.SetValue('', $progId, [Microsoft.Win32.RegistryValueKind]::String)
+
+                $assocStatus = 'created'
+                $createdId   = $progId
+            } finally {
+                if ($null -ne $progKey) { $progKey.Close() }
+                if ($null -ne $extKey)  { $extKey.Close()  }
+            }
+        } else {
+            $assocStatus = 'existing'
+        }
         $ok = $true
     } catch {
         Write-Host "❌ 添加失败: $($_.Exception.Message)" -ForegroundColor Red
@@ -317,12 +367,19 @@ function Add-NewMenuItem {
         if ($null -ne $snKey)   { $snKey.Close()   }
         if ($null -ne $classes) { $classes.Close() }
         if ($null -ne $base)    { $base.Close()    }
+        if ($null -ne $hkcr)    { $hkcr.Close()    }
     }
 
     if ($ok) {
         Update-Explorer
         Write-Host "✅ 已添加 [$displayName] ($ext) 到新建菜单。" -ForegroundColor Green
         Write-Host "   位置: $scope\$script:ClassesPath\$ext\ShellNew" -ForegroundColor Gray
+        if ($assocStatus -eq 'created') {
+            Write-Host "   已新建文件类型关联: $ext -> $createdId（该扩展名原本无关联）" -ForegroundColor Gray
+        } elseif ($assocStatus -eq 'existing') {
+            Write-Host '   ⚠️  该扩展名已有关联类型，为免破坏打开方式未做改动。' -ForegroundColor Yellow
+            Write-Host '      菜单显示名可能沿用现有类型名。' -ForegroundColor Yellow
+        }
         Write-Host '   若菜单未立即刷新，请重启资源管理器或注销重登录。' -ForegroundColor DarkGray
     }
 
@@ -378,10 +435,11 @@ function Remove-NewMenuItem {
         return
     }
 
-    $base    = $null
-    $classes = $null
-    $extKey  = $null
-    $ok      = $false
+    $base         = $null
+    $classes      = $null
+    $extKey       = $null
+    $ok           = $false
+    $removedAssoc = $null
     try {
         $base    = Get-BaseKey -Scope $target.Scope
         $classes = $base.OpenSubKey($script:ClassesPath, $true)
@@ -399,6 +457,15 @@ function Remove-NewMenuItem {
         }
 
         $extKey.DeleteSubKeyTree('ShellNew')
+
+        # 若关联是本脚本自建的（NewMenuMgr. 命名空间），一并清理，避免留下悬空的类型关联。
+        # 只认自己的前缀，绝不触碰系统或第三方 ProgID。
+        $assoc = [string]$extKey.GetValue('')
+        if ($assoc -and $assoc.StartsWith($script:ProgIdPrefix)) {
+            $extKey.DeleteValue('', $false)
+            $classes.DeleteSubKeyTree($assoc, $false)
+            $removedAssoc = $assoc
+        }
         $ok = $true
     } catch {
         Write-Host "❌ 移除失败: $($_.Exception.Message)" -ForegroundColor Red
@@ -411,7 +478,11 @@ function Remove-NewMenuItem {
     if ($ok) {
         Update-Explorer
         Write-Host "✅ 已移除 [$($target.Extension)] 的新建菜单项。" -ForegroundColor Green
-        Write-Host '   注：不会改动该文件类型的关联与图标。' -ForegroundColor Gray
+        if ($removedAssoc) {
+            Write-Host "   已一并清理自建的文件类型关联: $removedAssoc" -ForegroundColor Gray
+        } else {
+            Write-Host '   文件类型关联未改动（非本脚本创建）。' -ForegroundColor Gray
+        }
     }
 
     Wait-Return
@@ -429,7 +500,7 @@ do {
     } else {
         Write-Host '  权限: 标准用户（仅可写入「当前用户」，已足够）' -ForegroundColor Yellow
     }
-    Write-Host '  默认写入 HKCU\Software\Classes，不改动任何文件关联。' -ForegroundColor DarkGray
+    Write-Host '  默认写入 HKCU\Software\Classes；扩展名无关联时会自动建立，已有则保留。' -ForegroundColor DarkGray
     Write-Host '========================================' -ForegroundColor Cyan
     Write-Host '  1. 添加新建菜单项' -ForegroundColor Green
     Write-Host '  2. 查看 / 移除新建菜单项' -ForegroundColor Yellow
