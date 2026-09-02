@@ -201,25 +201,65 @@ function Get-NewMenuItems {
                 foreach ($extName in $classes.GetSubKeyNames()) {
                     if ($extName -notmatch $extPattern) { continue }
 
-                    $extKey = $null
-                    $snKey  = $null
+                    $extKey    = $null
+                    $snKey     = $null
+                    $childKey  = $null
+                    $childName = $null   # 第二层登记时的子键名（如 .docx\Word.Document.12）
                     try {
                         $extKey = $classes.OpenSubKey($extName)
                         if ($null -eq $extKey) { continue }
+
+                        # ---- 第一层：ShellNew 直接挂在扩展名键下（绝大多数登记方式） ----
                         $snKey = $extKey.OpenSubKey('ShellNew')
-                        if ($null -eq $snKey) { continue }
+
+                        if ($null -eq $snKey) {
+                            # ---- 第二层：ShellNew 挂在关联 ProgID 同名子键下 ----
+                            # Office/WPS 的登记方式（实测：.docx\Word.Document.12\ShellNew、
+                            # .xlsx\Excel.Sheet.12\ShellNew 等），只读一层会漏掉它们。
+                            # 先试扩展名默认值（ProgID）同名子键，未命中再遍历全部子键。
+                            $progId = [string]$extKey.GetValue('')
+                            $candNames = @($extKey.GetSubKeyNames())
+                            if (-not [string]::IsNullOrWhiteSpace($progId) -and $candNames -contains $progId) {
+                                $probe = $extKey.OpenSubKey($progId)
+                                if ($null -ne $probe) {
+                                    $psn = $probe.OpenSubKey('ShellNew')
+                                    if ($null -ne $psn) {
+                                        $childKey = $probe; $childName = $progId; $snKey = $psn
+                                    } else {
+                                        $probe.Close()
+                                    }
+                                }
+                            }
+                            if ($null -eq $childName) {
+                                foreach ($cn in $candNames) {
+                                    if ($cn -eq 'ShellNew') { continue }
+                                    $probe = $extKey.OpenSubKey($cn)
+                                    if ($null -eq $probe) { continue }
+                                    $psn = $probe.OpenSubKey('ShellNew')
+                                    if ($null -ne $psn) {
+                                        $childKey = $probe; $childName = $cn; $snKey = $psn
+                                        break
+                                    }
+                                    $probe.Close()
+                                }
+                            }
+                            if ($null -eq $childName) { continue }
+                        }
 
                         $list.Add([PSCustomObject]@{
-                            Extension   = $extName
-                            DisplayName = Get-MenuDisplayName -ExtKey $extKey -ShellNewKey $snKey -ClassesKey $classes -HkcrKey $hkcr -Extension $extName
-                            Strategy    = Get-ShellNewStrategy -ShellNewKey $snKey
-                            Scope       = $scope
+                            Extension     = $extName
+                            DisplayName   = Get-MenuDisplayName -ExtKey $extKey -ShellNewKey $snKey -ClassesKey $classes -HkcrKey $hkcr -Extension $extName
+                            Strategy      = Get-ShellNewStrategy -ShellNewKey $snKey
+                            Scope         = $scope
+                            ShellNewLevel = $(if ($childName) { 2 } else { 1 })
+                            ProgIdChild   = $childName
                         })
                     } catch {
                         continue
                     } finally {
-                        if ($null -ne $snKey)  { $snKey.Close()  }
-                        if ($null -ne $extKey) { $extKey.Close() }
+                        if ($null -ne $snKey)    { $snKey.Close()    }
+                        if ($null -ne $childKey) { $childKey.Close() }
+                        if ($null -ne $extKey)   { $extKey.Close()   }
                     }
                 }
             } catch {
@@ -438,6 +478,8 @@ function Remove-NewMenuItem {
     $base         = $null
     $classes      = $null
     $extKey       = $null
+    $childKey     = $null
+    $removedSn    = ''
     $ok           = $false
     $removedAssoc = $null
     try {
@@ -456,7 +498,32 @@ function Remove-NewMenuItem {
             return
         }
 
-        $extKey.DeleteSubKeyTree('ShellNew')
+        if ($target.ProgIdChild) {
+            # 第二层登记：ShellNew 挂在扩展名的子键（关联 ProgID）下，
+            # 例：.docx\Word.Document.12\ShellNew（Office/WPS 的登记方式）。
+            $childKey = $extKey.OpenSubKey($target.ProgIdChild, $true)
+            if ($null -eq $childKey) {
+                Write-Host "❌ 移除失败：无法打开 $($target.Extension)\$($target.ProgIdChild)。" -ForegroundColor Red
+                Wait-Return
+                return
+            }
+            $childKey.DeleteSubKeyTree('ShellNew', $false)
+            $removedSn = "$($target.Extension)\$($target.ProgIdChild)\ShellNew"
+
+            # 覆盖键已无任何内容（无子键、无值、默认值也为空）时清掉空壳，
+            # 避免留下悬空键。系统 ProgID 本体（如 HKCR\Word.Document.12）不受影响。
+            $defVal = [string]$childKey.GetValue('')
+            $noResidue = ($childKey.SubKeyCount -eq 0 -and
+                          $childKey.GetValueNames().Count -eq 0 -and
+                          [string]::IsNullOrEmpty($defVal))
+            $childKey.Close(); $childKey = $null
+            if ($noResidue) {
+                $extKey.DeleteSubKey($target.ProgIdChild, $false)
+            }
+        } else {
+            $extKey.DeleteSubKeyTree('ShellNew')
+            $removedSn = "$($target.Extension)\ShellNew"
+        }
 
         # 若关联是本脚本自建的（NewMenuMgr. 命名空间），一并清理，避免留下悬空的类型关联。
         # 只认自己的前缀，绝不触碰系统或第三方 ProgID。
@@ -470,14 +537,18 @@ function Remove-NewMenuItem {
     } catch {
         Write-Host "❌ 移除失败: $($_.Exception.Message)" -ForegroundColor Red
     } finally {
-        if ($null -ne $extKey)  { $extKey.Close()  }
-        if ($null -ne $classes) { $classes.Close() }
-        if ($null -ne $base)    { $base.Close()    }
+        if ($null -ne $childKey) { $childKey.Close() }
+        if ($null -ne $extKey)   { $extKey.Close()   }
+        if ($null -ne $classes)  { $classes.Close()  }
+        if ($null -ne $base)     { $base.Close()     }
     }
 
     if ($ok) {
         Update-Explorer
         Write-Host "✅ 已移除 [$($target.Extension)] 的新建菜单项。" -ForegroundColor Green
+        if ($removedSn) {
+            Write-Host "   删除位置: $removedSn" -ForegroundColor Gray
+        }
         if ($removedAssoc) {
             Write-Host "   已一并清理自建的文件类型关联: $removedAssoc" -ForegroundColor Gray
         } else {
