@@ -489,6 +489,555 @@ function Remove-NewMenuItem {
 }
 
 # ----------------------------------------------------------------------------
+# 打开方式管理（清理扩展名右键「打开方式」菜单中的残留/多余条目）
+#
+# 程序卸载后若没清干净登记，右键「打开方式」仍会列出它。管理三类来源：
+#   [推荐] 扩展名键下的 OpenWithProgids —— 值名是 ProgID（安装程序写入）
+#   [历史] FileExts\OpenWithList —— 曾用于打开该类型文件的程序 MRU（HKCU）
+#   [注册] Classes\Applications\xxx.exe —— 全局登记的可打开该类型的应用
+# 检测原理：ProgID / 应用的 shell\open\command 指向的可执行文件是否仍存在。
+# 安全原则：仅删除用户明确选中的项；绝不碰 FileExts\UserChoice（默认程序）。
+# ----------------------------------------------------------------------------
+
+# 从 "C:\...\app.exe" "%1" / app.exe "%1" / 裸程序名 解析出真实存在的 exe 路径
+function Resolve-AppExecutable {
+    param([string]$InputText)
+
+    if ([string]::IsNullOrWhiteSpace($InputText)) { return $null }
+    # command 里常含 %SystemRoot% 这类环境变量，先展开再解析
+    $text = [Environment]::ExpandEnvironmentVariables($InputText.Trim())
+
+    if ($text.StartsWith('"')) {
+        $m = [regex]::Match($text, '^"([^"]+)"')
+        if ($m.Success) { $text = $m.Groups[1].Value }
+    } elseif ($text.Contains(' ') -or $text.Contains("`t")) {
+        $m = [regex]::Match($text, '^(\S+)')
+        if ($m.Success) { $text = $m.Groups[1].Value }
+    }
+
+    $candidates = New-Object 'System.Collections.Generic.List[string]'
+    if ($text.Contains('\') -or $text.Contains('/') -or $text.Contains(':')) {
+        # 完整路径
+        $candidates.Add($text)
+        if (-not [System.IO.Path]::HasExtension($text)) { $candidates.Add($text + '.exe') }
+    } else {
+        # 裸程序名：App Paths 全局注册（优先）→ PATH 兜底
+        $name = $text
+        if (-not [System.IO.Path]::HasExtension($name)) { $name += '.exe' }
+        foreach ($base in @([Microsoft.Win32.Registry]::LocalMachine, [Microsoft.Win32.Registry]::CurrentUser)) {
+            $ap = $null
+            try {
+                $ap = $base.OpenSubKey("SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\$name")
+                if ($null -ne $ap) {
+                    $val = [string]$ap.GetValue('')
+                    if (-not [string]::IsNullOrWhiteSpace($val)) { $candidates.Add($val) }
+                }
+            } catch { } finally {
+                if ($null -ne $ap) { $ap.Close() }
+            }
+        }
+        foreach ($dir in ($env:PATH -split ';')) {
+            if (-not [string]::IsNullOrWhiteSpace($dir)) { $candidates.Add((Join-Path $dir $name)) }
+        }
+    }
+
+    foreach ($c in $candidates) {
+        $p = [Environment]::ExpandEnvironmentVariables($c.Trim())
+        if ($p -and (Test-Path -LiteralPath $p -PathType Leaf)) { return $p }
+    }
+    return $null
+}
+
+# 读取 exe 文件的版本信息（文件说明），用于友好显示名
+function Get-FileVersionName {
+    param([string]$Path)
+    if (-not $Path) { return $null }
+    try {
+        $vi = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($Path)
+        if (-not [string]::IsNullOrWhiteSpace($vi.FileDescription)) { return $vi.FileDescription }
+        if (-not [string]::IsNullOrWhiteSpace($vi.ProductName))    { return $vi.ProductName }
+    } catch { }
+    return $null
+}
+
+# 取 ProgID 的友好显示名（FriendlyTypeName / 默认描述）
+function Get-ProgIdDisplayName {
+    param($HkcrKey, [string]$ProgId)
+
+    if ([string]::IsNullOrWhiteSpace($ProgId) -or $null -eq $HkcrKey) { return $ProgId }
+    $key = $null
+    try {
+        $key = $HkcrKey.OpenSubKey($ProgId)
+        if ($null -eq $key) { return $ProgId }
+        $name = Resolve-IndirectString ([string]$key.GetValue('FriendlyTypeName'))
+        if ([string]::IsNullOrWhiteSpace($name)) {
+            $name = Resolve-IndirectString ([string]$key.GetValue(''))
+        }
+        if ([string]::IsNullOrWhiteSpace($name)) { return $ProgId }
+        return $name
+    } catch {
+        return $ProgId
+    } finally {
+        if ($null -ne $key) { $key.Close() }
+    }
+}
+
+# 枚举 [推荐] 来源：扩展名键 OpenWithProgids 中的建议 ProgID
+function Get-OpenWithProgidRows {
+    param([string]$Extension)
+
+    $progIds = @{}
+    foreach ($scope in @('HKCU', 'HKLM')) {
+        $base = $null; $classes = $null; $extKey = $null; $owpKey = $null
+        try {
+            $base    = Get-BaseKey -Scope $scope
+            $classes = $base.OpenSubKey($script:ClassesPath)
+            if ($null -eq $classes) { continue }
+            $extKey  = $classes.OpenSubKey($Extension)
+            if ($null -eq $extKey)  { continue }
+            $owpKey  = $extKey.OpenSubKey('OpenWithProgids')
+            if ($null -eq $owpKey)  { continue }
+            foreach ($vn in $owpKey.GetValueNames()) {
+                if (-not [string]::IsNullOrEmpty($vn) -and -not $progIds.ContainsKey($vn)) {
+                    $progIds[$vn] = $true
+                }
+            }
+        } catch { } finally {
+            if ($null -ne $owpKey)  { $owpKey.Close()  }
+            if ($null -ne $extKey)  { $extKey.Close()  }
+            if ($null -ne $classes) { $classes.Close() }
+            if ($null -ne $base)    { $base.Close()    }
+        }
+    }
+
+    if ($progIds.Count -eq 0) { return }
+
+    $hkcr = $null
+    try {
+        $hkcr = Get-BaseKey -Scope 'HKCR'
+        foreach ($progId in $progIds.Keys) {
+            $display = Get-ProgIdDisplayName -HkcrKey $hkcr -ProgId $progId
+
+            $progKey = $null
+            $pExists = $false
+            try {
+                $progKey = $hkcr.OpenSubKey($progId)
+                $pExists = ($null -ne $progKey)
+            } finally {
+                if ($null -ne $progKey) { $progKey.Close() }
+            }
+
+            $status = 'ok'; $statusText = '有效'
+            if (-not $pExists) {
+                $status = 'gone'; $statusText = '悬空（ProgID 已不存在）'
+            } else {
+                $cmdKey = $null; $cmd = $null
+                try {
+                    $cmdKey = $hkcr.OpenSubKey("$progId\shell\open\command")
+                    if ($null -ne $cmdKey) { $cmd = [string]$cmdKey.GetValue('') }
+                } catch { } finally {
+                    if ($null -ne $cmdKey) { $cmdKey.Close() }
+                }
+                if ($null -eq (Resolve-AppExecutable -InputText $cmd)) {
+                    $status = 'gone'; $statusText = '已卸载（程序不存在）'
+                }
+            }
+
+            [PSCustomObject]@{
+                Source = '推荐'; Kind = 'Progid'; Arg = $progId
+                Name = $display; Detail = "ProgID: $progId"
+                Status = $status; StatusText = $statusText
+            }
+        }
+    } finally {
+        if ($null -ne $hkcr) { $hkcr.Close() }
+    }
+}
+
+# 枚举 [历史] 来源：FileExts 中曾用于打开该类型的程序（MRU）
+function Get-OpenWithHistoryRows {
+    param([string]$Extension)
+
+    $key = $null
+    try {
+        $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey(
+            "Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\$Extension\OpenWithList")
+        if ($null -eq $key) { return }
+
+        foreach ($vn in $key.GetValueNames()) {
+            if ([string]::IsNullOrEmpty($vn) -or $vn -eq 'MRUList') { continue }
+            $exeName = [string]$key.GetValue($vn)
+            $exePath = Resolve-AppExecutable -InputText $exeName
+
+            $display = $exeName
+            $detail  = ''
+            $status  = 'ok'
+            $statusText = '有效'
+            if ($exePath) {
+                $fd = Get-FileVersionName -Path $exePath
+                if ($fd) { $display = "$fd ($exeName)" }
+                $detail = $exePath
+            } elseif ($exeName.Contains('!')) {
+                # 形如 "Microsoft.WindowsNotepad_xxx!App" —— UWP/商店应用标识，
+                # 无法用 exe 判定其是否存在，不作"残留"误报，仅提示。
+                $status = 'other'; $statusText = '应用条目（非可执行登记）'
+                $detail = 'UWP/商店应用标识，暂不判定是否残留'
+            } else {
+                $status = 'gone'; $statusText = '已卸载（程序不存在）'
+                $detail = '未能解析到该程序'
+            }
+
+            [PSCustomObject]@{
+                Source = '历史'; Kind = 'History'; Arg = $vn
+                Name = $display; Detail = $detail
+                Status = $status; StatusText = $statusText
+            }
+        }
+    } catch { } finally {
+        if ($null -ne $key) { $key.Close() }
+    }
+}
+
+# 枚举 [注册] 来源：全局登记的 Applications\xxx.exe 候选应用
+# 仅列出「已卸载的残留」或「显式声明支持该扩展名」的应用，避免把
+# 对任意文件都生效的通用候选全列出来造成误删。
+function Get-ApplicationRows {
+    param([string]$Extension)
+
+    $apps = @{}
+    foreach ($scope in @('HKCU', 'HKLM')) {
+        $base = $null; $classes = $null; $appsKey = $null
+        try {
+            $base    = Get-BaseKey -Scope $scope
+            $classes = $base.OpenSubKey($script:ClassesPath)
+            if ($null -eq $classes) { continue }
+            $appsKey = $classes.OpenSubKey('Applications')
+            if ($null -eq $appsKey) { continue }
+            foreach ($n in $appsKey.GetSubKeyNames()) {
+                if (-not $apps.ContainsKey($n)) { $apps[$n] = $scope }
+            }
+        } catch { } finally {
+            if ($null -ne $appsKey) { $appsKey.Close() }
+            if ($null -ne $classes) { $classes.Close() }
+            if ($null -ne $base)    { $base.Close()    }
+        }
+    }
+
+    if ($apps.Count -eq 0) { return }
+
+    $hkcr = $null
+    try {
+        $hkcr = Get-BaseKey -Scope 'HKCR'
+        foreach ($app in $apps.Keys) {
+            # 读取合并视图下的友好名 / 打开命令 / SupportedTypes
+            $friendly = $null
+            $appKey = $null
+            try {
+                $appKey = $hkcr.OpenSubKey("Applications\$app")
+                if ($null -ne $appKey) {
+                    $friendly = Resolve-IndirectString ([string]$appKey.GetValue('FriendlyAppName'))
+                }
+            } catch { } finally {
+                if ($null -ne $appKey) { $appKey.Close() }
+            }
+
+            $cmdKey = $null; $cmd = $null
+            $hasCmd = $false
+            try {
+                $cmdKey = $hkcr.OpenSubKey("Applications\$app\shell\open\command")
+                if ($null -ne $cmdKey) {
+                    $cmd = [string]$cmdKey.GetValue('')
+                    $hasCmd = $true
+                }
+            } catch { } finally {
+                if ($null -ne $cmdKey) { $cmdKey.Close() }
+            }
+
+            $stKey = $null
+            $explicit = $false
+            try {
+                $stKey = $hkcr.OpenSubKey("Applications\$app\SupportedTypes")
+                if ($null -ne $stKey) { $explicit = ($null -ne $stKey.GetValue($Extension)) }
+            } catch { } finally {
+                if ($null -ne $stKey) { $stKey.Close() }
+            }
+
+            # 没有 shell\open\command 的登记是历史遗留空壳（系统里大量 cmd.exe、
+            # regedit.exe 等），Explorer 无法调用，不会出现在打开方式菜单——
+            # 不列为残留，避免误报和误删。
+            if (-not $hasCmd) { continue }
+
+            $exePath = Resolve-AppExecutable -InputText $cmd
+            if ($exePath) {
+                # 程序仍存在：仅当它显式声明支持该扩展名才列出（用于去掉某项推荐）
+                if (-not $explicit) { continue }
+                $status = 'ok'; $statusText = '有效（该类型的候选）'
+            } else {
+                # 程序已消失：整键删除才是对「残留」的正确处理
+                $status = 'gone'; $statusText = '已卸载（残留登记）'
+            }
+
+            if (-not $friendly) { $friendly = Get-FileVersionName -Path $exePath }
+            if (-not $friendly) { $friendly = $app.TrimEnd('.exe') }
+
+            $kind = if ($status -eq 'gone') { 'AppAll' } else { 'AppType' }
+            [PSCustomObject]@{
+                Source = '注册'; Kind = $kind; Arg = $app
+                Name = $friendly; Detail = "登记键: Applications\$app"
+                Status = $status; StatusText = $statusText
+            }
+        }
+    } finally {
+        if ($null -ne $hkcr) { $hkcr.Close() }
+    }
+}
+
+# 删除单个条目（按来源类型分发到具体删除函数）
+function Invoke-RemoveOpenWithRow {
+    param([string]$Extension, $Row)
+
+    switch ($Row.Kind) {
+        'Progid'  { return (Remove-OpenWithProgidItem -Extension $Extension -ProgId $Row.Arg) }
+        'History' { return (Remove-OpenWithHistoryItem -Extension $Extension -ValueName $Row.Arg) }
+        'AppAll'  { return (Remove-ApplicationItem -Extension $Extension -AppName $Row.Arg -RemoveWholeApp) }
+        'AppType' { return (Remove-ApplicationItem -Extension $Extension -AppName $Row.Arg) }
+    }
+    return $false
+}
+
+function Get-OpenWithRemoveExplain {
+    param([string]$Extension, $Row)
+
+    switch ($Row.Kind) {
+        'Progid'  { return "从 $Extension\OpenWithProgids 移除建议项 $($Row.Arg)（HKCU/HKLM 均处理）" }
+        'History' { return "从打开历史 FileExts\$Extension\OpenWithList 移除「$($Row.Name)」" }
+        'AppAll'  { return "删除已卸载程序的全局登记 Classes\Applications\$($Row.Arg)（HKCU/HKLM）" }
+        'AppType' { return "移除 $($Row.Arg) 对 $Extension 的支持声明（SupportedTypes）" }
+    }
+    return ''
+}
+
+# 删除 OpenWithProgids 中的某个建议 ProgID（两个 hive 都清理，删后清空键）
+function Remove-OpenWithProgidItem {
+    param([string]$Extension, [string]$ProgId)
+
+    $ok = $false
+    foreach ($scope in @('HKLM', 'HKCU')) {
+        $base = $null; $classes = $null; $extKey = $null; $owpKey = $null
+        try {
+            $base    = Get-BaseKey -Scope $scope
+            $classes = $base.OpenSubKey($script:ClassesPath, $true)
+            if ($null -eq $classes) { continue }
+            $extKey  = $classes.OpenSubKey($Extension, $true)
+            if ($null -eq $extKey)  { continue }
+            $owpKey  = $extKey.OpenSubKey('OpenWithProgids', $true)
+            if ($null -eq $owpKey)  { continue }
+
+            if ($owpKey.GetValueNames() -contains $ProgId) {
+                $owpKey.DeleteValue($ProgId, $false)
+                $ok = $true
+            }
+            if ($owpKey.ValueCount -eq 0 -and $owpKey.SubKeyCount -eq 0) {
+                $extKey.DeleteSubKey('OpenWithProgids', $false)
+            }
+        } catch { } finally {
+            if ($null -ne $owpKey)  { $owpKey.Close()  }
+            if ($null -ne $extKey)  { $extKey.Close()  }
+            if ($null -ne $classes) { $classes.Close() }
+            if ($null -ne $base)    { $base.Close()    }
+        }
+    }
+    return $ok
+}
+
+# 删除打开历史 OpenWithList 中的某个值，并同步修正 MRUList
+function Remove-OpenWithHistoryItem {
+    param([string]$Extension, [string]$ValueName)
+
+    $folder = "Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\$Extension"
+    $key = $null
+    $parent = $null
+    try {
+        $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey("$folder\OpenWithList", $true)
+        if ($null -eq $key) { return $false }
+
+        if ($key.GetValueNames() -contains $ValueName) {
+            $key.DeleteValue($ValueName, $false)
+        }
+        $mru = [string]$key.GetValue('MRUList')
+        if (-not [string]::IsNullOrEmpty($mru)) {
+            $mru2 = $mru -replace [regex]::Escape($ValueName.Substring(0, 1)), ''
+            if ($mru2) {
+                $key.SetValue('MRUList', $mru2, [Microsoft.Win32.RegistryValueKind]::String)
+            } else {
+                $key.DeleteValue('MRUList', $false)
+            }
+        }
+        # 列表已空则连键一起删除，避免空残留
+        if ($key.GetValueNames().Count -eq 0) {
+            $key.Close(); $key = $null
+            $parent = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($folder, $true)
+            if ($null -ne $parent) { $parent.DeleteSubKey('OpenWithList', $false) }
+        }
+        return $true
+    } catch {
+        return $false
+    } finally {
+        if ($null -ne $key)    { $key.Close()    }
+        if ($null -ne $parent) { $parent.Close() }
+    }
+}
+
+# 删除 Applications 登记：
+#   -RemoveWholeApp → 应用已卸载，整个登记键删除
+#   不带该开关      → 应用仍有效，仅去掉对该扩展名的支持声明
+function Remove-ApplicationItem {
+    param([string]$Extension, [string]$AppName, [switch]$RemoveWholeApp)
+
+    $ok = $false
+    foreach ($scope in @('HKLM', 'HKCU')) {
+        $base = $null; $classes = $null; $appKey = $null; $stKey = $null
+        try {
+            $base    = Get-BaseKey -Scope $scope
+            $classes = $base.OpenSubKey($script:ClassesPath, $true)
+            if ($null -eq $classes) { continue }
+
+            if ($RemoveWholeApp) {
+                $appPath = "Applications\$AppName"
+                $appKey = $classes.OpenSubKey($appPath)
+                if ($null -ne $appKey) {
+                    $classes.DeleteSubKeyTree($appPath, $false)
+                    $ok = $true
+                }
+                continue
+            }
+
+            $appKey = $classes.OpenSubKey("Applications\$AppName", $true)
+            if ($null -eq $appKey) { continue }
+            $stKey = $appKey.OpenSubKey('SupportedTypes', $true)
+            if ($null -eq $stKey)  { continue }
+
+            if ($stKey.GetValueNames() -contains $Extension) {
+                $stKey.DeleteValue($Extension, $false)
+                $ok = $true
+            }
+            if ($stKey.ValueCount -eq 0 -and $stKey.SubKeyCount -eq 0) {
+                $appKey.DeleteSubKey('SupportedTypes', $false)
+            }
+        } catch { } finally {
+            if ($null -ne $stKey)  { $stKey.Close()  }
+            if ($null -ne $appKey) { $appKey.Close() }
+            if ($null -ne $classes) { $classes.Close() }
+            if ($null -ne $base)    { $base.Close()    }
+        }
+    }
+    return $ok
+}
+
+# 主流程：输入扩展名 → 列出三类打开方式条目 → 选择删除
+function Manage-OpenWithMenu {
+    Show-Header '管理扩展名的打开方式'
+    Write-Host '作用：查看/移除某扩展名右键菜单「打开方式」中的条目。' -ForegroundColor DarkGray
+    Write-Host '      红色「已卸载/悬空」= 程序卸载后的残留，可放心清理。' -ForegroundColor DarkGray
+    Write-Host '      绿色「有效」= 程序仍安装，删除会移除它的打开方式候选（酌情操作）。' -ForegroundColor DarkGray
+
+    $ext = (Read-Host '请输入文件后缀名 (例如 .jpg / .docx)').Trim()
+    if ([string]::IsNullOrWhiteSpace($ext)) {
+        Write-Host '❌ 后缀名不能为空。' -ForegroundColor Red
+        Wait-Return
+        return
+    }
+    if (-not $ext.StartsWith('.')) { $ext = '.' + $ext }
+    if ($ext -notmatch '^\.[^\\/:*?"<>|\s]+$') {
+        Write-Host "❌ 后缀名不合法: $ext（不能包含空白或 \ / : * ? `" < > |）" -ForegroundColor Red
+        Wait-Return
+        return
+    }
+
+    Write-Host "正在扫描 $ext 的打开方式条目..." -ForegroundColor Yellow
+
+    $rows = @(Get-OpenWithProgidRows -Extension $ext) +
+            @(Get-OpenWithHistoryRows -Extension $ext) +
+            @(Get-ApplicationRows -Extension $ext)
+
+    if ($rows.Count -eq 0) {
+        Write-Host "`nℹ️  未找到 $ext 的打开方式条目（无推荐 ProgID、无使用历史、无注册候选）。" -ForegroundColor Gray
+        Wait-Return
+        return
+    }
+
+    Write-Host "`n找到 $($rows.Count) 个打开方式条目：" -ForegroundColor Cyan
+    for ($i = 0; $i -lt $rows.Count; $i++) {
+        $r = $rows[$i]
+        $name = $r.Name
+        if ($name.Length -gt 42) { $name = $name.Substring(0, 39) + '...' }
+        $color = switch ($r.Status) { 'gone' { 'Red' } 'ok' { 'DarkGreen' } default { 'Yellow' } }
+        Write-Host (" [{0,2}] [{1}] {2}" -f ($i + 1), $r.Source, $name) -NoNewline -ForegroundColor White
+        Write-Host ('   ' + $r.StatusText) -ForegroundColor $color
+        if ($r.Detail) {
+            Write-Host ("        └ $($r.Detail)") -ForegroundColor DarkGray
+        }
+    }
+
+    Write-Host ''
+    Write-Host '输入要移除的序号（多个用逗号或空格分隔），0 取消：' -ForegroundColor Yellow
+    $selection = (Read-Host '请选择').Trim()
+    if ([string]::IsNullOrWhiteSpace($selection) -or $selection -eq '0') {
+        Write-Host '已取消操作。' -ForegroundColor Gray
+        Wait-Return
+        return
+    }
+
+    $picks = @($selection -split '[\s,，]+' |
+        Where-Object { $_ -match '^\d+$' } |
+        ForEach-Object { [int]$_ } |
+        Sort-Object -Unique)
+    if ($picks.Count -eq 0 -or ($picks | Where-Object { $_ -lt 1 -or $_ -gt $rows.Count }).Count -gt 0) {
+        Write-Host '❌ 无效的序号输入。' -ForegroundColor Red
+        Wait-Return
+        return
+    }
+
+    Write-Host "`n即将移除以下 $($picks.Count) 项：" -ForegroundColor Yellow
+    foreach ($p in $picks) {
+        $r = $rows[$p - 1]
+        $color = switch ($r.Status) { 'gone' { 'Red' } default { 'Yellow' } }
+        Write-Host "  [$($r.Source)] $($r.Name)  ($($r.StatusText))" -ForegroundColor $color
+        Write-Host ("     → " + (Get-OpenWithRemoveExplain -Extension $ext -Row $r)) -ForegroundColor DarkGray
+    }
+
+    $confirm = (Read-Host "`n确认删除？输入 y 确认，其它任意键取消").Trim()
+    if ($confirm -notmatch '^(y|yes)$') {
+        Write-Host '已取消操作。' -ForegroundColor Gray
+        Wait-Return
+        return
+    }
+
+    $okCount = 0
+    $failNames = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($p in $picks) {
+        $r = $rows[$p - 1]
+        if (Invoke-RemoveOpenWithRow -Extension $ext -Row $r) {
+            $okCount++
+        } else {
+            $failNames.Add($r.Name)
+        }
+    }
+
+    Write-Host ''
+    if ($okCount -gt 0) {
+        Update-Explorer
+        Write-Host "✅ 已移除 $okCount 项。" -ForegroundColor Green
+        Write-Host '   若右键菜单未立即刷新，请重启资源管理器。' -ForegroundColor DarkGray
+    }
+    if ($failNames.Count -gt 0) {
+        Write-Host "⚠️  以下 $($failNames.Count) 项删除失败（可能无权限或已被移除）：" -ForegroundColor Red
+        Write-Host "   $($failNames -join '、')" -ForegroundColor Red
+    }
+    Wait-Return
+}
+
+# ----------------------------------------------------------------------------
 # 主循环
 # ----------------------------------------------------------------------------
 
@@ -504,6 +1053,7 @@ do {
     Write-Host '========================================' -ForegroundColor Cyan
     Write-Host '  1. 添加新建菜单项' -ForegroundColor Green
     Write-Host '  2. 查看 / 移除新建菜单项' -ForegroundColor Yellow
+    Write-Host '  3. 管理扩展名的打开方式（清理残留）' -ForegroundColor Cyan
     Write-Host '  0. 退出脚本' -ForegroundColor Gray
     Write-Host '========================================' -ForegroundColor Cyan
 
@@ -512,6 +1062,7 @@ do {
     switch ($choice) {
         '1' { Add-NewMenuItem }
         '2' { Remove-NewMenuItem }
+        '3' { Manage-OpenWithMenu }
         '0' {
             Write-Host '正在退出...' -ForegroundColor Cyan
             exit 0
